@@ -430,12 +430,16 @@ void FeatureMatcherController::Match(
   std::unordered_set<image_pair_t> image_pair_ids;
   image_pair_ids.reserve(image_pairs.size());
 
+  std::unordered_set<image_t> all_image_ids;
   size_t num_outputs = 0;
   for (const auto& [image_id1, image_id2] : image_pairs) {
     // Avoid self-matches.
     if (image_id1 == image_id2) {
       continue;
     }
+
+    all_image_ids.insert(image_id1);
+    all_image_ids.insert(image_id2);
 
     // Avoid duplicate image pairs.
     const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
@@ -488,10 +492,18 @@ void FeatureMatcherController::Match(
   // Write results to database
   //////////////////////////////////////////////////////////////////////////////
 
+  std::unordered_set<image_t> logged_image_ids;
+
   for (size_t i = 0; i < num_outputs; ++i) {
     auto output_job = output_queue_.Pop();
     THROW_CHECK(output_job.IsValid());
     auto& output = output_job.Data();
+
+    if (logged_image_ids.insert(output.image_id1).second) {
+      LOG(INFO) << StringPrintf(
+      "Processing image [%d/%d] ", logged_image_ids.size(), all_image_ids.size()) 
+                << cache_->GetImage(output.image_id1).Name();
+    }
 
     if (output.matches.size() <
         static_cast<size_t>(geometry_options_.min_num_inliers)) {
@@ -506,6 +518,15 @@ void FeatureMatcherController::Match(
     cache_->WriteMatches(output.image_id1, output.image_id2, output.matches);
     cache_->WriteTwoViewGeometry(
         output.image_id1, output.image_id2, output.two_view_geometry);
+  }
+
+  for (const image_t image_id : all_image_ids) {
+    if (logged_image_ids.find(image_id) == logged_image_ids.end()) {
+      logged_image_ids.insert(image_id);
+      LOG(INFO) << StringPrintf(
+      "Processing image [%d/%d] ", logged_image_ids.size(), all_image_ids.size()) 
+                << cache_->GetImage(image_id).Name();   
+    }
   }
 
   THROW_CHECK_EQ(output_queue_.Size(), 0);
